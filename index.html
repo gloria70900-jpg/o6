@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Mega Dark Dome & Ivory Obelisk Pilgrimage XR</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js & Controls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #020205;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      user-select: none;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #3b82f6;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="relative text-slate-100">
+
+  <!-- Top & Control Overlay Interface -->
+  <header class="absolute top-4 left-4 z-30 pointer-events-none flex flex-col gap-2">
+    <div class="bg-black/75 backdrop-blur-md border border-slate-700/60 p-4 rounded-xl shadow-2xl max-w-sm pointer-events-auto transition-all">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+        <h1 class="text-sm font-bold tracking-wide uppercase text-amber-200">신성한 오벨리스크 실사 돔 극장</h1>
+      </div>
+      <p class="text-xs text-slate-300 leading-relaxed mb-3">
+        거대한 암흑 돔 내부에서 중심부의 실제 천연색 탑돌이 성소를 조망합니다. 준비하신 실제 영상을 불러와 중앙 스크린 및 오벨리스크에 실사로 투영할 수 있습니다.
+      </p>
+
+      <!-- Action Buttons -->
+      <div class="flex flex-wrap gap-2 text-xs">
+        <label class="flex-1 cursor-pointer bg-amber-600/80 hover:bg-amber-500 text-white font-medium py-2 px-3 rounded-lg text-center shadow transition flex items-center justify-center gap-1">
+          <span>📁 내 영상(MP4) 업로드</span>
+          <input type="file" id="video-input" accept="video/mp4,video/webm,video/quicktime" class="hidden">
+        </label>
+        <button id="toggle-screen-btn" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3 py-2 rounded-lg font-medium transition">
+          곡면 스크린 ON/OFF
+        </button>
+      </div>
+
+      <!-- Distance and Camera Presets -->
+      <div class="mt-3 pt-3 border-t border-slate-700/50 flex items-center justify-between text-xs text-slate-400">
+        <span>시점 위치:</span>
+        <div class="flex gap-1.5">
+          <button id="view-close" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200">근접</button>
+          <button id="view-normal" class="px-2 py-1 rounded bg-amber-600/40 text-amber-200 border border-amber-500/50">원경 (돔 테라스)</button>
+          <button id="view-aerial" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200">탑 뷰</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Video Element for Texture Mapping (Hidden by default, supports local/blob playback) -->
+  <video id="video-source" loop muted playsinline crossOrigin="anonymous" style="display:none;"></video>
+
+  <script>
+    const scene = new THREE.Scene();
+    // 돔 내부의 무한한 암흑을 표현하는 배경색
+    scene.background = new THREE.Color(0x020306);
+    scene.fog = new THREE.FogExp2(0x020306, 0.0075);
+
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+    // 관찰자 기본 위치: 오벨리스크를 멀리서 바라보는 거대 돔의 테라스 (Z: 42m)
+    camera.position.set(0, 7.5, 42);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    // OrbitControls for Non-VR interaction (Mobile touch & PC Mouse)
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxPolarAngle = Math.PI / 2 + 0.02; // 바닥 관통 방지
+    controls.minDistance = 6;
+    controls.maxDistance = 85;
+    controls.target.set(0, 10, 0);
+
+    // 외부 라이브러리 종속성 없는 독립형 WebXR VR 버튼 생성 및 세션 바인딩
+    function setupWebXRButton(renderer) {
+      const button = document.createElement('button');
+      button.style.position = 'fixed';
+      button.style.bottom = '24px';
+      button.style.left = '50%';
+      button.style.transform = 'translateX(-50%)';
+      button.style.padding = '12px 28px';
+      button.style.backgroundColor = '#d97706';
+      button.style.color = '#ffffff';
+      button.style.borderRadius = '9999px';
+      button.style.boxShadow = '0 10px 25px -5px rgba(217, 119, 6, 0.6)';
+      button.style.border = '1px solid #f59e0b';
+      button.style.fontWeight = 'bold';
+      button.style.fontSize = '14px';
+      button.style.cursor = 'pointer';
+      button.style.zIndex = '999';
+      button.style.transition = 'all 0.2s ease';
+      button.textContent = 'VR 지원 확인 중...';
+
+      if ('xr' in navigator) {
+        let currentSession = null;
+
+        async function onSessionStarted(session) {
+          session.addEventListener('end', onSessionEnded);
+          await renderer.xr.setSession(session);
+          button.textContent = 'VR 모드 종료';
+          button.style.backgroundColor = '#4b5563';
+          button.style.borderColor = '#9ca3af';
+          currentSession = session;
+        }
+
+        function onSessionEnded() {
+          if (currentSession) {
+            currentSession.removeEventListener('end', onSessionEnded);
+          }
+          button.textContent = '🌌 ENTER VR';
+          button.style.backgroundColor = '#d97706';
+          button.style.borderColor = '#f59e0b';
+          currentSession = null;
+        }
+
+        navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+          if (supported) {
+            button.textContent = '🌌 ENTER VR';
+            button.onclick = () => {
+              if (currentSession === null) {
+                const sessionInit = { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] };
+                navigator.xr.requestSession('immersive-vr', sessionInit).then(onSessionStarted);
+              } else {
+                currentSession.end();
+              }
+            };
+          } else {
+            button.textContent = 'VR 미지원 환경 (3D 뷰어 모드)';
+            button.style.opacity = '0.75';
+            button.style.cursor = 'default';
+          }
+        }).catch(() => {
+          button.textContent = '3D 뷰어 모드 (VR 비활성)';
+          button.style.opacity = '0.75';
+        });
+      } else {
+        button.textContent = 'WebXR 미지원 브라우저 (3D 모드)';
+        button.style.opacity = '0.75';
+      }
+
+      document.body.appendChild(button);
+    }
+    setupWebXRButton(renderer);
+
+    // 은은한 칠흑 암흑 돔 앰비언트 라이트 (홀로그램 느낌 제거용 사실적 조명)
+    const ambientLight = new THREE.AmbientLight(0xfff6ea, 0.65);
+    scene.add(ambientLight);
+
+    // 오벨리스크 상단과 순례자들을 밝히는 주 태양광/성소 집중광 (따스한 햇살 느낌)
+    const sunLight = new THREE.DirectionalLight(0xfff2df, 1.8);
+    sunLight.position.set(25, 45, 30);
+    sunLight.castShadow = true;
+    scene.add(sunLight);
+
+    // 오벨리스크 자체의 밝은 아이보리 빛 반사를 위한 지면 반사광
+    const groundReflect = new THREE.DirectionalLight(0xb5c7d8, 0.45);
+    groundReflect.position.set(-20, -10, -20);
+    scene.add(groundReflect);
+
+    // 외벽을 이루는 140m 직경의 거대한 암흑 돔 (외부는 칠흑 속의 웅장한 공간감)
+    const domeRadius = 75;
+    const domeGeo = new THREE.SphereGeometry(domeRadius, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.52);
+    domeGeo.scale(-1, 1, 1); // 내부 렌더링
+    const domeMat = new THREE.MeshStandardMaterial({
+      color: 0x05070e,
+      roughness: 0.95,
+      metalness: 0.1,
+      side: THREE.BackSide
+    });
+    const vastDome = new THREE.Mesh(domeGeo, domeMat);
+    scene.add(vastDome);
+
+    // 돔 하단 바닥 원형 플랫폼 (어두운 화강암 바닥)
+    const domeFloorGeo = new THREE.CircleGeometry(domeRadius, 64);
+    const domeFloorMat = new THREE.MeshStandardMaterial({
+      color: 0x070912,
+      roughness: 0.85,
+      metalness: 0.2
+    });
+    const domeFloor = new THREE.Mesh(domeFloorGeo, domeFloorMat);
+    domeFloor.rotation.x = -Math.PI / 2;
+    domeFloor.position.y = -0.05;
+    scene.add(domeFloor);
+
+    // 1) 고해상도 아이보리 석회암/대리석 텍스처 생성 (홀로그램 대신 실제 석재 질감)
+    function createIvoryMarbleTexture() {
+      const cvs = document.createElement('canvas');
+      cvs.width = 1024;
+      cvs.height = 1024;
+      const ctx = cvs.getContext('2d');
+      // 기본 아이보리/베이지 베이스
+      ctx.fillStyle = '#f5efe4';
+      ctx.fillRect(0, 0, 1024, 1024);
+
+      // 미세한 천연 대리석 입자 및 결 생성
+      for (let i = 0; i < 40000; i++) {
+        const x = Math.random() * 1024;
+        const y = Math.random() * 1024;
+        const alpha = Math.random() * 0.08;
+        ctx.fillStyle = `rgba(180, 160, 135, ${alpha})`;
+        ctx.fillRect(x, y, 2 + Math.random() * 3, 1 + Math.random() * 2);
+      }
+
+      // 굵은 크림색/은은한 황토색 석재 패턴 라인
+      ctx.lineWidth = 3;
+      for (let j = 0; j < 12; j++) {
+        ctx.strokeStyle = `rgba(160, 135, 105, ${0.05 + Math.random() * 0.07})`;
+        ctx.beginPath();
+        let cy = Math.random() * 1024;
+        ctx.moveTo(0, cy);
+        for (let x = 0; x < 1024; x += 100) {
+          cy += (Math.random() - 0.5) * 60;
+          ctx.lineTo(x, cy);
+        }
+        ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(cvs);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      return tex;
+    }
+    const ivoryMarbleTex = createIvoryMarbleTexture();
+
+    // 2) 성소 바닥의 샌드스톤 광장 타일 텍스처
+    function createSanctuaryFloorTexture() {
+      const cvs = document.createElement('canvas');
+      cvs.width = 1024;
+      cvs.height = 1024;
+      const ctx = cvs.getContext('2d');
+      ctx.fillStyle = '#dfd3c3';
+      ctx.fillRect(0, 0, 1024, 1024);
+
+      // 타일 격자
+      ctx.strokeStyle = '#baa691';
+      ctx.lineWidth = 4;
+      const step = 64;
+      for (let x = 0; x <= 1024; x += step) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0); ctx.lineTo(x, 1024);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= 1024; y += step) {
+        ctx.beginPath();
+        ctx.moveTo(0, y); ctx.lineTo(1024, y);
+        ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(cvs);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(8, 8);
+      return tex;
+    }
+    const sanctuaryFloorTex = createSanctuaryFloorTexture();
+
+    const sanctuaryGroup = new THREE.Group();
+    scene.add(sanctuaryGroup);
+
+    // 성소 중앙 광장 (지름 38m의 밝은 원형 광장 - 돔의 암흑과 강한 명암 대비)
+    const stageRadius = 20;
+    const stageGeo = new THREE.CylinderGeometry(stageRadius, stageRadius + 1.2, 0.8, 64);
+    const stageMat = new THREE.MeshStandardMaterial({
+      map: sanctuaryFloorTex,
+      roughness: 0.6,
+      metalness: 0.05
+    });
+    const stageMesh = new THREE.Mesh(stageGeo, stageMat);
+    stageMesh.position.y = 0.4;
+    stageMesh.receiveShadow = true;
+    sanctuaryGroup.add(stageMesh);
+
+    // 성소 가장자리 황금빛 장식 테두리 링
+    const edgeRingGeo = new THREE.TorusGeometry(stageRadius + 0.1, 0.25, 16, 100);
+    const edgeRingMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.3 });
+    const edgeRing = new THREE.Mesh(edgeRingGeo, edgeRingMat);
+    edgeRing.rotation.x = Math.PI / 2;
+    edgeRing.position.y = 0.8;
+    sanctuaryGroup.add(edgeRing);
+
+    // 다단 오벨리스크 받침대 (하얀 크림 대리석)
+    const baseMat = new THREE.MeshStandardMaterial({
+      map: ivoryMarbleTex,
+      color: 0xfffaf0,
+      roughness: 0.35,
+      metalness: 0.05
+    });
+    const pedestal1 = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.9, 6.4), baseMat);
+    pedestal1.position.y = 1.2;
+    sanctuaryGroup.add(pedestal1);
+
+    const pedestal2 = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.9, 5.0), baseMat);
+    pedestal2.position.y = 2.1;
+    sanctuaryGroup.add(pedestal2);
+
+    // 하얀/아이보리색 거대 오벨리스크 본체 (실제 기념비 형태: 사각뿔대 + 피라미디온 꼭대기)
+    const obeliskHeight = 25;
+    const obeliskBottomWidth = 2.8;
+    const obeliskTopWidth = 1.6;
+
+    // 사각뿔대 지오메트리
+    const obeliskBodyGeo = new THREE.CylinderGeometry(
+      (obeliskTopWidth * Math.SQRT2) / 2,
+      (obeliskBottomWidth * Math.SQRT2) / 2,
+      obeliskHeight,
+      4 // 4각 단면 오벨리스크
+    );
+    const obeliskBodyMat = new THREE.MeshStandardMaterial({
+      map: ivoryMarbleTex,
+      color: 0xfffcf5,
+      roughness: 0.28,
+      metalness: 0.08
+    });
+    const obeliskBody = new THREE.Mesh(obeliskBodyGeo, obeliskBodyMat);
+    obeliskBody.position.y = 2.55 + obeliskHeight / 2;
+    obeliskBody.rotation.y = Math.PI / 4; // 각도를 정면으로 정렬
+    obeliskBody.castShadow = true;
+    obeliskBody.receiveShadow = true;
+    sanctuaryGroup.add(obeliskBody);
+
+    // 오벨리스크 상단 피라미드 금장 피라미디온(Pyramidion)
+    const pyramidionHeight = 2.8;
+    const pyramidionGeo = new THREE.ConeGeometry((obeliskTopWidth * Math.SQRT2) / 2, pyramidionHeight, 4);
+    const pyramidionMat = new THREE.MeshStandardMaterial({
+      color: 0xf5ecc8,
+      roughness: 0.2,
+      metalness: 0.35
+    });
+    const pyramidion = new THREE.Mesh(pyramidionGeo, pyramidionMat);
+    pyramidion.position.y = 2.55 + obeliskHeight + pyramidionHeight / 2;
+    pyramidion.rotation.y = Math.PI / 4;
+    sanctuaryGroup.add(pyramidion);
+
+    // 기존의 단순 막대기 뼈대 대신, 신체 비율(머리, 다채로운 자연색 옷자락, 어깨)을 갖춘
+    // 실사풍 인물들이 무리를 지어 경건하게 오벨리스크 둘레를 공전(탑돌이)하도록 구성합니다.
+    const crowdGroup = new THREE.Group();
+    sanctuaryGroup.add(crowdGroup);
+
+    // 사람들의 다양한 전통 및 자연 직물 색상 팔레트 (아이보리 롭, 사막 베이지, 딥 블루, 인디고, 테라코타, 화이트)
+    const pilgrimColors = [
+      0xf8f9fa, // 순백 로브
+      0xeeddcc, // 베이지 리넨
+      0x4a5568, // 차콜 슬레이트
+      0x8b5a2b, // 황토 브라운
+      0x1e3a8a, // 네이비 블루
+      0x7c2d12, // 테라코타
+      0x047857, // 딥 에메랄드
+      0x581c87  // 딥 바이올렛
+    ];
+
+    const numPilgrims = 240; // 240명의 대규모 군중
+    const pilgrimObjects = [];
+
+    // 개별 사람을 하나의 자연스러운 3D 인형 형태로 조합
+    const headGeo = new THREE.SphereGeometry(0.18, 12, 12);
+    const bodyGeo = new THREE.CylinderGeometry(0.24, 0.38, 1.35, 12); // 하단이 자연스럽게 넓어지는 튜닉/로브
+    const headMat = new THREE.MeshStandardMaterial({ color: 0xd2a679, roughness: 0.8 }); // 피부톤
+
+    for (let i = 0; i < numPilgrims; i++) {
+      const person = new THREE.Group();
+
+      // 옷 색상 무작위 선택
+      const col = pilgrimColors[Math.floor(Math.random() * pilgrimColors.length)];
+      const robeMat = new THREE.MeshStandardMaterial({
+        color: col,
+        roughness: 0.7,
+        metalness: 0.05
+      });
+
+      // 몸체 (로브/의복)
+      const bodyMesh = new THREE.Mesh(bodyGeo, robeMat);
+      bodyMesh.position.y = 0.68;
+      bodyMesh.castShadow = true;
+      person.add(bodyMesh);
+
+      // 머리
+      const headMesh = new THREE.Mesh(headGeo, headMat);
+      headMesh.position.y = 1.48;
+      person.add(headMesh);
+
+      // 팔/어깨 느낌을 주는 디테일
+      const shoulderGeo = new THREE.BoxGeometry(0.55, 0.2, 0.28);
+      const shoulderMesh = new THREE.Mesh(shoulderGeo, robeMat);
+      shoulderMesh.position.y = 1.25;
+      person.add(shoulderMesh);
+
+      // 탑돌이 궤도 반경: 3개의 층위로 자연스럽게 흩어져 공전 (반경 5.5m ~ 16m)
+      const trackLayer = i % 4;
+      const baseRadius = 5.2 + trackLayer * 3.2 + (Math.random() - 0.5) * 1.8;
+      const startAngle = Math.random() * Math.PI * 2;
+      const speed = 0.04 + (4 - trackLayer) * 0.012 + (Math.random() - 0.5) * 0.01; // 안쪽이 조금 더 빠름
+
+      person.userData = {
+        radius: baseRadius,
+        angle: startAngle,
+        speed: speed,
+        bobSpeed: 3 + Math.random() * 2,
+        bobHeight: 0.04 + Math.random() * 0.03
+      };
+
+      crowdGroup.add(person);
+      pilgrimObjects.push(person);
+    }
+
+    // 사용자가 업로드한 실제 영상을 돔 전방에 실사로 거대하게 띄우는 곡면 시네마 스크린
+    const screenCurveRadius = 32;
+    const screenGeo = new THREE.CylinderGeometry(
+      screenCurveRadius, screenCurveRadius, 14, 64, 1, true, -Math.PI * 0.35, Math.PI * 0.7
+    );
+    screenGeo.scale(-1, 1, 1); // 내부를 향해 렌더
+
+    // 동영상 텍스처 및 절차적 캔버스 백업 생성
+    const video = document.getElementById('video-source');
+    let videoTexture;
+
+    // 영상이 아직 없을 때 보여줄 고해상도 실사 합성 캔버스
+    const fallbackCanvas = document.createElement('canvas');
+    fallbackCanvas.width = 1280;
+    fallbackCanvas.height = 720;
+    const fbCtx = fallbackCanvas.getContext('2d');
+
+    function updateFallbackCanvas(time) {
+      // 캔버스에 실사풍 성소 영상 애니메이션 프레임 그리기
+      const grad = fbCtx.createLinearGradient(0, 0, 0, 720);
+      grad.addColorStop(0, '#1a2639');
+      grad.addColorStop(0.5, '#4e657a');
+      grad.addColorStop(1, '#8c9ea8');
+      fbCtx.fillStyle = grad;
+      fbCtx.fillRect(0, 0, 1280, 720);
+
+      // 원경의 사막/산맥 실사 톤
+      fbCtx.fillStyle = '#bda890';
+      fbCtx.beginPath();
+      fbCtx.moveTo(0, 500);
+      for (let x = 0; x <= 1280; x += 100) {
+        fbCtx.lineTo(x, 460 + Math.sin(x * 0.005) * 40);
+      }
+      fbCtx.lineTo(1280, 720);
+      fbCtx.lineTo(0, 720);
+      fbCtx.fill();
+
+      // 화면 중앙의 거대 아이보리 탑
+      fbCtx.fillStyle = '#f8f5ee';
+      fbCtx.beginPath();
+      fbCtx.moveTo(615, 120);
+      fbCtx.lineTo(665, 120);
+      fbCtx.lineTo(685, 580);
+      fbCtx.lineTo(595, 580);
+      fbCtx.closePath();
+      fbCtx.fill();
+
+      // 금빛 피라미디온 꼭대기
+      fbCtx.fillStyle = '#e6c875';
+      fbCtx.beginPath();
+      fbCtx.moveTo(615, 120);
+      fbCtx.lineTo(640, 70);
+      fbCtx.lineTo(665, 120);
+      fbCtx.closePath();
+      fbCtx.fill();
+
+      // 오벨리스크 주위를 지나가는 순례자 행렬 실루엣
+      const pCount = 35;
+      for (let i = 0; i < pCount; i++) {
+        const px = ((i * 38 + time * 40) % 700) + 290;
+        const py = 570 + Math.sin(px * 0.08) * 3;
+        // 옷 색상
+        fbCtx.fillStyle = i % 2 === 0 ? '#ffffff' : '#334155';
+        fbCtx.fillRect(px, py - 18, 9, 20);
+        // 머리
+        fbCtx.fillStyle = '#c99a6b';
+        fbCtx.beginPath();
+        fbCtx.arc(px + 4.5, py - 22, 4, 0, Math.PI * 2);
+        fbCtx.fill();
+      }
+
+      // 비디오 인포 안내 자막
+      fbCtx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+      fbCtx.fillRect(40, 40, 520, 60);
+      fbCtx.fillStyle = '#fef08a';
+      fbCtx.font = 'bold 22px sans-serif';
+      fbCtx.fillText('🔴 실사 비디오 피드: 아이보리 성소 & 순례', 60, 78);
+    }
+
+    const fallbackTexture = new THREE.CanvasTexture(fallbackCanvas);
+    let activeTexture = fallbackTexture;
+
+    const screenMat = new THREE.MeshBasicMaterial({
+      map: activeTexture,
+      side: THREE.DoubleSide
+    });
+    const curvedScreen = new THREE.Mesh(screenGeo, screenMat);
+    curvedScreen.position.set(0, 11, -4);
+    curvedScreen.rotation.y = Math.PI; // 정면을 향함
+    scene.add(curvedScreen);
+
+    // 스크린 외곽의 세련된 황동 프레임
+    const frameGeo = new THREE.CylinderGeometry(
+      screenCurveRadius + 0.1, screenCurveRadius + 0.1, 14.4, 64, 1, true, -Math.PI * 0.355, Math.PI * 0.71
+    );
+    frameGeo.scale(-1, 1, 1);
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: 0x242730,
+      metalness: 0.8,
+      roughness: 0.3,
+      side: THREE.BackSide
+    });
+    const screenFrame = new THREE.Mesh(frameGeo, frameMat);
+    screenFrame.position.copy(curvedScreen.position);
+    screenFrame.rotation.copy(curvedScreen.rotation);
+    scene.add(screenFrame);
+
+    // 사용자가 소장한 실제 비디오 파일을 업로드하여 3D 텍스처로 즉시 매핑
+    const videoInput = document.getElementById('video-input');
+    videoInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const fileURL = URL.createObjectURL(file);
+        video.src = fileURL;
+        video.play().then(() => {
+          videoTexture = new THREE.VideoTexture(video);
+          videoTexture.minFilter = THREE.LinearFilter;
+          videoTexture.magFilter = THREE.LinearFilter;
+          videoTexture.format = THREE.RGBAFormat;
+
+          // 곡면 스크린과 오벨리스크 양측에 실제 비디오 반영
+          screenMat.map = videoTexture;
+          screenMat.needsUpdate = true;
+          activeTexture = videoTexture;
+
+          // 피라미드 몸체에도 영상 텍스처를 자연스럽게 전사
+          obeliskBodyMat.map = videoTexture;
+          obeliskBodyMat.color.setHex(0xffffff);
+          obeliskBodyMat.needsUpdate = true;
+        }).catch(err => {
+          console.warn('Video auto-play restriction:', err);
+        });
+      }
+    });
+
+    // 곡면 스크린 토글 버튼
+    const toggleScreenBtn = document.getElementById('toggle-screen-btn');
+    let screenVisible = true;
+    toggleScreenBtn.addEventListener('click', () => {
+      screenVisible = !screenVisible;
+      curvedScreen.visible = screenVisible;
+      screenFrame.visible = screenVisible;
+      toggleScreenBtn.innerText = screenVisible ? '곡면 스크린 ON/OFF' : '곡면 스크린 숨김됨';
+      toggleScreenBtn.classList.toggle('text-amber-300', screenVisible);
+    });
+
+    // 카메라 프리셋 뷰 설정
+    document.getElementById('view-close').addEventListener('click', () => {
+      controls.target.set(0, 3, 0);
+      gsapCameraTo(0, 2.5, 14);
+    });
+    document.getElementById('view-normal').addEventListener('click', () => {
+      controls.target.set(0, 10, 0);
+      gsapCameraTo(0, 7.5, 42);
+    });
+    document.getElementById('view-aerial').addEventListener('click', () => {
+      controls.target.set(0, 0, 0);
+      gsapCameraTo(0, 38, 22);
+    });
+
+    function gsapCameraTo(x, y, z) {
+      camera.position.set(x, y, z);
+      controls.update();
+    }
+
+    // 돔 내부의 어둠과 성소의 빛 사이에 부유하는 따뜻한 입자들
+    const sparkCount = 400;
+    const sparkGeo = new THREE.BufferGeometry();
+    const sparkPos = new Float32Array(sparkCount * 3);
+    for (let i = 0; i < sparkCount * 3; i += 3) {
+      sparkPos[i] = (Math.random() - 0.5) * 50;
+      sparkPos[i + 1] = Math.random() * 28;
+      sparkPos[i + 2] = (Math.random() - 0.5) * 50;
+    }
+    sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+    const sparkMat = new THREE.PointsMaterial({
+      color: 0xffddaa,
+      size: 0.18,
+      transparent: true,
+      opacity: 0.6
+    });
+    const sparks = new THREE.Points(sparkGeo, sparkMat);
+    sanctuaryGroup.add(sparks);
+
+    const clock = new THREE.Clock();
+
+    renderer.setAnimationLoop(() => {
+      const elapsed = clock.getElapsedTime();
+
+      // 1. 비디오 텍스처 업데이트 또는 폴백 캔버스 갱신
+      if (!video.src || video.paused) {
+        updateFallbackCanvas(elapsed);
+        fallbackTexture.needsUpdate = true;
+      }
+
+      // 2. 탑돌이 순례자들의 사실적인 원형 행렬 공전
+      for (let i = 0; i < pilgrimObjects.length; i++) {
+        const p = pilgrimObjects[i];
+        p.userData.angle += p.userData.speed * 0.015;
+
+        // 원형 궤도 이동
+        const curR = p.userData.radius;
+        const ang = p.userData.angle;
+        p.position.x = Math.cos(ang) * curR;
+        p.position.z = Math.sin(ang) * curR;
+
+        // 걷는 걸음걸이에 따른 미세한 상하 바운스 (자연스러운 보행 효과)
+        p.position.y = 0.8 + Math.abs(Math.sin(elapsed * p.userData.bobSpeed)) * p.userData.bobHeight;
+
+        // 진행 방향을 바라보도록 회전 (탑돌이 방향: 반시계/시계 순)
+        p.rotation.y = -ang - Math.PI / 2;
+      }
+
+      // 3. 미세한 파티클 상승
+      const pArr = sparks.geometry.attributes.position.array;
+      for (let j = 1; j < pArr.length; j += 3) {
+        pArr[j] += 0.02;
+        if (pArr[j] > 28) pArr[j] = 0.2;
+      }
+      sparks.geometry.attributes.position.needsUpdate = true;
+
+      // 4. 비-XR 모드일 경우 OrbitControls 업데이트
+      if (!renderer.xr.isPresenting) {
+        controls.update();
+      }
+
+      renderer.render(scene, camera);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
